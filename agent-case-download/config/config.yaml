@@ -1,0 +1,50 @@
+browser: chromium
+headless: false
+timeout: 30000
+
+# Central portal registry. --app-base-url may temporarily override a URL in CI.
+applications:
+  cares_connect:
+    priority: 1
+    report_folder: caresconnect
+    username_env: CARES_CONNECT_USERNAME
+    password_env: CARES_CONNECT_PASSWORD
+    base_url: https://caresconnect.straumann.com/stmn-dhs-webui/
+  ori_portal:
+    priority: 2
+    report_folder: oriportal
+    username_env: ORI_PORTAL_USERNAME
+    password_env: ORI_PORTAL_PASSWORD
+    base_url: https://oriportal.com/cases
+    timeout: 90000
+    navigation_wait_until: domcontentloaded
+  io_scanner:
+    priority: 3
+    report_folder: ioscanner
+    username_env: IO_SCANNER_USERNAME
+    password_env: IO_SCANNER_PASSWORD
+    base_url: https://scanner.ioscanner.com/login
+    timeout: 90000
+    navigation_wait_until: domcontentloaded
+  carestream:
+    priority: 4
+    report_folder: carestream
+    username_env: CARESTREAM_USERNAME
+    password_env: CARESTREAM_PASSWORD
+    base_url: https://csdentalconnect.com/
+    timeout: 90000
+    navigation_wait_until: domcontentloaded
+  ddx:
+    priority: 5
+    report_folder: ddx
+    username_env: DDX_USERNAME
+    password_env: DDX_PASSWORD
+    base_url: https://roedental.ddxdental.com/lab
+  axs_straumann:
+    priority: 6
+    report_folder: axs_straumann
+    username_env: AXS_STRAUMANN_USERNAME
+    password_env: AXS_STRAUMANN_PASSWORD
+    base_url: https://axs.straumann.com/login
+    timeout: 90000
+    navigation_wait_until: domcontentloaded

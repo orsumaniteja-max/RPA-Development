@@ -1,0 +1,12 @@
+allure-pytest
+loguru
+playwright
+pytest
+pytest-html
+pytest-xdist
+pytest-rerunfailures
+python-dotenv
+pymssql
+PyYAML
+thefuzz[speedup]
+pypdf

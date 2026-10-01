@@ -1,0 +1,20 @@
+{
+  "name": "paywrightpractice1",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "keywords": [],
+  "description": "Playwright with JavaScript/TypeScript\r 1. Install Node.js\r     Download the LTS version from: https://nodejs.org\r     Verify installation:\r         node -v\r         npm -v\r 2. Install Visual Studio Code\r     Download VS Code: https://code.visualstudio.com/\r     Recommended VS Code extensions:\r         Playwright Test for VS Code\r         ESLint\r         Prettier\r         GitLens\r 3. Create a Playwright Project\r         mkdir PlaywrightProject\r         cd PlaywrightProject\r         npm init -y\r 4. Install Playwright\r         npm init playwright@latest\r 5. Install Browser Binaries\r         npx playwright install\r     This installs:\r         Chromium\r         Firefox\r         WebKit\r 6. Verify Installation\r     Run the sample test:\r         npx playwright test\r     Run in headed mode:\r         npx playwright test --headed\r     Generate report:\r         npx playwright show-report",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

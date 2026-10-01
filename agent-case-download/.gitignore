@@ -1,0 +1,13 @@
+.env
+__pycache__/
+.test-dependencies/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+reports/allure-results/
+reports/screenshots/
+reports/combined-report/
+reports/
+results/
+docs/
+data/

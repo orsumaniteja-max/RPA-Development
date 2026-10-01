@@ -1,0 +1,267 @@
+trigger: none
+
+schedules:
+  - cron: '0 1 * * *'
+    displayName: Daily 1 AM UTC
+    branches:
+      include:
+        - main
+    always: true
+
+
+parameters:
+  - name: application
+    displayName: Application (all or one portal)
+    type: string
+    default: all
+    values:
+      - cares_connect
+      - ori_portal
+      - io_scanner
+      - carestream
+      - ddx
+      - axs_straumann
+      - all
+  - name: allowEmptyCaseState
+    displayName: Initialize first run when no saved case history exists
+    type: boolean
+    default: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  projectDir: $(Build.SourcesDirectory)/agent-case-download/
+  dockerImage: roe-dental-tests:$(Build.BuildId)
+  keyVaultName: roe-keyvault-dev
+  azureSubscription: roe-azure-sc-dev
+  caseStateBuild: ''
+  caseStateReady: 'false'
+  caseStatePacked: 'false'
+
+jobs:
+  - job: RunApplicationTests
+    displayName: Run all applications sequentially
+    timeoutInMinutes: 90
+    steps:
+      - checkout: self
+        clean: true
+
+      - bash: mkdir -p "$(projectDir)/reports/combined-report"
+        displayName: Prepare report directory
+
+      - task: AzureKeyVault@2
+        displayName: Load secrets from Key Vault
+        inputs:
+          azureSubscription: $(azureSubscription)
+          KeyVaultName: $(keyVaultName)
+          SecretsFilter: >
+            CARES-CONNECT-USERNAME,CARES-CONNECT-PASSWORD,
+            ORI-PORTAL-USERNAME,ORI-PORTAL-PASSWORD,
+            IO-SCANNER-USERNAME,IO-SCANNER-PASSWORD,
+            CARESTREAM-USERNAME,CARESTREAM-PASSWORD,
+            DDX-USERNAME,DDX-PASSWORD,
+            AXS-STRAUMANN-USERNAME,AXS-STRAUMANN-PASSWORD,
+            APPLICATIONINSIGHTS-CONNECTION-STRING-RPA,
+            AZURE-SQL-SERVER,AZURE-SQL-DATABASE,
+            AZURE-SQL-USERNAME,AZURE-SQL-PASSWORD
+
+      - task: Docker@2
+        displayName: Build Playwright test image
+        inputs:
+          command: build
+          repository: roe-dental-tests
+          Dockerfile: $(projectDir)/Dockerfile
+          buildContext: $(projectDir)
+          tags: $(Build.BuildId)
+
+      - bash: |
+          set -euo pipefail
+          docker run --rm --env CI=true "$(dockerImage)" \
+            python -m pytest --noconftest -o addopts='' tests/unit -q
+          docker run --rm --shm-size=1g --env CI=true "$(dockerImage)" \
+            python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop(); print('Chromium launch verified')"
+        displayName: Verify unit tests and Chromium in CI image
+
+      - bash: python3 -u "$(projectDir)/utilities/ci_case_state.py" select
+        timeoutInMinutes: 3
+        displayName: Find latest case history and prevent overlapping capture
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          ALLOW_EMPTY_CASE_STATE: ${{ parameters.allowEmptyCaseState }}
+
+      - task: DownloadPipelineArtifact@2
+        condition: and(succeeded(), ne(variables['caseStateBuild'], ''))
+        displayName: Restore case history artifact from previous run
+        inputs:
+          buildType: specific
+          project: $(System.TeamProject)
+          definition: $(System.DefinitionId)
+          buildVersionToDownload: specific
+          pipelineId: $(caseStateBuild)
+          artifactName: rpa-case-state
+          targetPath: $(Pipeline.Workspace)/previous-case-state
+
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(projectDir)/data"
+          if [ -n "${STATE_BUILD}" ]; then
+            python3 "$(projectDir)/utilities/ci_case_state.py" restore \
+              --archive "$(Pipeline.Workspace)/previous-case-state/state.zip"
+          elif [ "${ALLOW_EMPTY,,}" != "true" ]; then
+            echo "No saved case history. Explicitly enable allowEmptyCaseState to initialize history."
+            exit 1
+          else
+            echo "No previous case-state artifact. Initializing first-run history."
+          fi
+          python3 "$(projectDir)/utilities/ci_case_state.py" retain
+          echo "##vso[task.setvariable variable=caseStateReady]true"
+        displayName: Prepare persistent case results before capture
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          STATE_BUILD: $(caseStateBuild)
+          ALLOW_EMPTY: ${{ parameters.allowEmptyCaseState }}
+
+      - bash: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$(projectDir)/reports:/app/reports" \
+            --volume "$(projectDir)/data:/app/data" \
+            --env CI=true \
+            --env AZURE_SQL_SERVER \
+            --env AZURE_SQL_DATABASE \
+            --env AZURE_SQL_USERNAME \
+            --env AZURE_SQL_PASSWORD \
+            "$(dockerImage)" \
+            python -u -m utilities.sync_rpa_case_history
+        displayName: Synchronize restored RPA history to Azure SQL
+        env:
+          AZURE_SQL_SERVER: $(AZURE-SQL-SERVER)
+          AZURE_SQL_DATABASE: $(AZURE-SQL-DATABASE)
+          AZURE_SQL_USERNAME: $(AZURE-SQL-USERNAME)
+          AZURE_SQL_PASSWORD: $(AZURE-SQL-PASSWORD)
+
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(projectDir)/reports/combined-report"
+          echo "##vso[build.addbuildtag]rpa-capture-started"
+
+          if [ "${TEST_APPLICATION}" = "all" ]; then
+            test_paths=(
+              tests/ddx
+              tests/carestream
+              tests/cares_connect
+              tests/io_scanner
+              tests/ori_portal
+              tests/axs_straumann
+            )
+          else
+            test_paths=("tests/${TEST_APPLICATION}")
+          fi
+
+          docker run --rm \
+            --shm-size=1g \
+            --volume "$(projectDir)/reports:/app/reports" \
+            --volume "$(projectDir)/data:/app/data" \
+            --env CI \
+            --env CARES_CONNECT_USERNAME \
+            --env CARES_CONNECT_PASSWORD \
+            --env ORI_PORTAL_USERNAME \
+            --env ORI_PORTAL_PASSWORD \
+            --env IO_SCANNER_USERNAME \
+            --env IO_SCANNER_PASSWORD \
+            --env CARESTREAM_USERNAME \
+            --env CARESTREAM_PASSWORD \
+            --env DDX_USERNAME \
+            --env DDX_PASSWORD \
+            --env AXS_STRAUMANN_USERNAME \
+            --env AXS_STRAUMANN_PASSWORD \
+            --env AGENT_APPLICATIONINSIGHTS_CONNECTION_STRING \
+            --env AZURE_SQL_SERVER \
+            --env AZURE_SQL_DATABASE \
+            --env AZURE_SQL_USERNAME \
+            --env AZURE_SQL_PASSWORD \
+            "$(dockerImage)" \
+            python -m pytest \
+            "${test_paths[@]}" \
+            --reruns 2 \
+            --reruns-delay 15
+        displayName: Run ${{ parameters.application }} applications sequentially in Docker
+        env:
+          CI: true
+          TEST_APPLICATION: ${{ parameters.application }}
+          CARES_CONNECT_USERNAME: $(CARES-CONNECT-USERNAME)
+          CARES_CONNECT_PASSWORD: $(CARES-CONNECT-PASSWORD)
+          ORI_PORTAL_USERNAME: $(ORI-PORTAL-USERNAME)
+          ORI_PORTAL_PASSWORD: $(ORI-PORTAL-PASSWORD)
+          IO_SCANNER_USERNAME: $(IO-SCANNER-USERNAME)
+          IO_SCANNER_PASSWORD: $(IO-SCANNER-PASSWORD)
+          CARESTREAM_USERNAME: $(CARESTREAM-USERNAME)
+          CARESTREAM_PASSWORD: $(CARESTREAM-PASSWORD)
+          DDX_USERNAME: $(DDX-USERNAME)
+          DDX_PASSWORD: $(DDX-PASSWORD)
+          AXS_STRAUMANN_USERNAME: $(AXS-STRAUMANN-USERNAME)
+          AXS_STRAUMANN_PASSWORD: $(AXS-STRAUMANN-PASSWORD)
+          AGENT_APPLICATIONINSIGHTS_CONNECTION_STRING: $(APPLICATIONINSIGHTS-CONNECTION-STRING-RPA)
+          AZURE_SQL_SERVER: $(AZURE-SQL-SERVER)
+          AZURE_SQL_DATABASE: $(AZURE-SQL-DATABASE)
+          AZURE_SQL_USERNAME: $(AZURE-SQL-USERNAME)
+          AZURE_SQL_PASSWORD: $(AZURE-SQL-PASSWORD)
+
+      - bash: |
+          set -euo pipefail
+          # Docker writes to bind-mounted reports/data as root. Return ownership
+          # to the hosted-agent user before Python snapshots persistent state.
+          mkdir -p "$(projectDir)/reports" "$(projectDir)/data"
+          sudo chown -R "$(id -u):$(id -g)" "$(projectDir)/reports" "$(projectDir)/data"
+          python3 "$(projectDir)/utilities/ci_case_state.py" pack \
+            --archive "$(Pipeline.Workspace)/case-state/state.zip"
+          echo "##vso[task.setvariable variable=caseStatePacked]true"
+        condition: and(always(), eq(variables['caseStateReady'], 'true'))
+        name: saveCaseState
+        displayName: Save cumulative case history including partial test progress
+
+      - task: PublishPipelineArtifact@1
+        condition: and(always(), eq(variables['caseStatePacked'], 'true'))
+        inputs:
+          targetPath: $(Pipeline.Workspace)/case-state
+          artifact: rpa-case-state
+          publishLocation: pipeline
+        displayName: Publish case state for the next run
+
+      - task: PublishTestResults@2
+        condition: always()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: $(projectDir)/reports/combined-report/junit.xml
+          testRunTitle: ROE Dental - ${{ parameters.application }}
+          failTaskOnFailedTests: false
+        displayName: Publish combined test results
+
+      - bash: |
+          set -euo pipefail
+          junit_file="$(projectDir)/reports/combined-report/junit.xml"
+          if [ -f "${junit_file}" ]; then
+            docker run --rm \
+              --entrypoint python \
+              --volume "$(projectDir)/reports:/app/reports" \
+              "$(dockerImage)" \
+              utilities/azure_summary.py \
+              reports/combined-report/junit.xml \
+              reports/combined-report/azure-summary.md
+            echo "##vso[task.uploadsummary]$(projectDir)/reports/combined-report/azure-summary.md"
+          else
+            echo "No JUnit report was produced. Check the Docker test-step log."
+          fi
+        condition: always()
+        displayName: Publish combined execution summary
+
+      - task: PublishPipelineArtifact@1
+        condition: always()
+        inputs:
+          targetPath: $(projectDir)/reports/combined-report
+          artifact: roe-dental-${{ parameters.application }}-html-report
+          publishLocation: pipeline
+        displayName: Publish ${{ parameters.application }} HTML report and evidence
+
+
